@@ -52,9 +52,11 @@ int UI_init(UI_Machine *machine)
 
     // Machine flags
     machine->state = UI_STARTUP;
+    machine->protocol = PROTOCOL_I2C;
     machine->stateUpdated = OC_TRUE;
-    machine->protocol = PROTOCOL_NONE;
     machine->displayUpdated = OC_FALSE;
+    machine->menuUpdated = OC_FALSE;
+    machine->menuIndex = 0;
     machine->errorCode = EC_OK;
     machine->buttonEvents = 0;
 
@@ -135,17 +137,11 @@ int UI_updateScreen(UI_Machine *machine)
 {
     if (!machine) { return 1; }
 
-    printf("displayRow0:\n");
-    for (unsigned char i = 0; i < OC_SCREEN_WIDTH; i++)
-    {
-        printf(" %02X'%c'", machine->displayRow0[i], machine->displayRow0[i]);
-    }
-    printf("\ndisplayRow1:\n");
-    for (unsigned char i = 0; i < OC_SCREEN_WIDTH; i++)
-    {
-        printf(" %02X'%c'", machine->displayRow1[i], machine->displayRow1[i]);
-    }
-    printf("\n\n");
+    printf("display:\n+----------------------+\n| ");
+    printf("%s", machine->displayRow0);
+    printf(" | protocol: '%u'\n| ", machine->protocol);
+    printf("%s", machine->displayRow1);
+    printf(" |\n+----------------------+\n\n");
     
     return 0;
 }
@@ -184,14 +180,13 @@ void UI_stateUpdate(UI_Machine *machine)
 {
     if (!machine) { return; }
 
-    // DEV
-    printf("Enter button events (hex): ");
-    scanf("%X", &(machine->buttonEvents));
-
     switch (machine->state)
     {
         case UI_STARTUP:
             SUPD_startup(machine);
+            break;
+        case UI_PROTOCOL_SELECT:
+            SUPD_protocolSelect(machine);
             break;
         default:
             break;
@@ -231,7 +226,7 @@ void SUPD_startup(UI_Machine *machine)
 {
     if (!machine) { return; }
 
-    if (machine->buttonEvents)
+    if (buttonEvents)
     {
         machine->state = UI_PROTOCOL_SELECT;
         machine->stateUpdated = OC_TRUE;
@@ -245,18 +240,108 @@ void SACT_protocolSelect(UI_Machine *machine)
     if (machine->stateUpdated)
     {
         machine->stateUpdated = OC_FALSE;
+        /*
+        machine->protocol = PROTOCOL_I2C;
+        machine->menuIndex = 0;
 
         char str1[] = "Protocol:";
-        char str2[] = "I2C";
+        if (machine->menuIndex > 4)
+        {
+            UI_Error(machine, EC_PROTOCOL);
+            return;
+        }
         if (UI_displayMemWrite(machine, MODE_TOP, str1) ||
-            UI_displayMemWrite(machine, MODE_BOTTOM, str2))
+            UI_displayMemWrite(machine, MODE_BOTTOM,
+            protocolList[machine->menuIndex]))
         {
             UI_Error(machine, EC_MEM_WRITE);
             return;
         }
+        */
+
+        UI_newMenuSetup(machine, protocolMenuText, protocolMenuValues,
+            5U, &(machine->protocol));
 
         machine->displayUpdated = OC_TRUE;
     }
+
+        /*
+        if (machine->menuIndex > 4)
+        {
+            UI_Error(machine, EC_PROTOCOL);
+            return;
+        }
+
+
+        if (UI_displayMemWrite(machine, MODE_BOTTOM,
+            protocolList[machine->menuIndex]))
+        {
+            UI_Error(machine, EC_MEM_WRITE);
+            return;
+        }
+        */
+}
+
+void SUPD_protocolSelect(UI_Machine *machine)
+{
+    if (!machine) { return; } 
+
+    if (buttonEvents & (BUTTON_UP | BUTTON_DOWN))
+    {
+        UI_menuChangeOption(machine, protocolMenuText, protocolMenuValues,
+            5U, &(machine->protocol), (buttonEvents & BUTTON_DOWN));
+
+        machine->displayUpdated = OC_TRUE;
+    }
+}
+
+// New menu setup function
+int UI_newMenuSetup(UI_Machine *machine, char menuText[][17U],
+    int optionValues[], unsigned char numOptions,
+    unsigned char *currentSelection)
+{
+    if (!machine || !currentSelection) { return 1; }
+
+    // Display new title
+    UI_displayMemWrite(machine, MODE_TOP, menuText[0U]);
+    
+    // Reset menuIndex
+    machine->menuIndex = 0U;
+
+    // Go with first option for now
+    UI_displayMemWrite(machine, MODE_BOTTOM,
+        menuText[(machine->menuIndex) + 1U]);
+    *currentSelection = optionValues[machine->menuIndex];
+
+    return 0;
+}
+
+// Change menu option function
+int UI_menuChangeOption(UI_Machine *machine, char menuText[][17U],
+    int optionValues[], unsigned char numOptions,
+    unsigned char *currentSelection, unsigned char incrementMode)
+{
+    if (!machine || !currentSelection) { return 1; }
+
+    if (incrementMode)
+    {
+        (machine->menuIndex)++;
+        if (machine->menuIndex >= numOptions)
+            machine->menuIndex = 0U;
+    }
+    else
+    {
+        (machine->menuIndex)--;
+        if (machine->menuIndex >= numOptions)
+            machine->menuIndex = numOptions - 1;
+    }
+
+    // Update option display
+    UI_displayMemWrite(machine, MODE_BOTTOM,
+        menuText[(machine->menuIndex) + 1U]);
+    *currentSelection = optionValues[machine->menuIndex];
+
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -272,8 +357,12 @@ int main(int argc, char **argv)
     // Hand control over to the state machine
     while (1)
     {
-        UI_stateAction(&machine);
+        // DEV
+        printf("Enter button events (hex): ");
+        scanf("%X", &buttonEvents);
+
         UI_stateUpdate(&machine);
+        UI_stateAction(&machine);
 
         if (machine.displayUpdated && machine.state != UI_ERROR)
         {
