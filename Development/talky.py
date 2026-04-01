@@ -22,16 +22,16 @@ def protocolSelect():
         # Scan for devices and print list for user
         print("Scanning for I2C devices...")
         print(i2cObj.scan())
-        addrText = input("[ADDR (I2C)] : ")
+        addrText = input("[ADDR] : ")
         try:
             i2cAddr = int(addrText)
         except:
             print("Error! Invalid address, aborting...")
             protocolMode = 255
-    elif userInp[1] == "1":
+    elif userInp[0] == "1":
         protocolMode = 1
         print("SPI protocol selected!")
-    elif userInp[2] == "2":
+    elif userInp[0] == "2":
         protocolMode = 2
         print("UART protocol selected!")
     else:
@@ -40,7 +40,7 @@ def protocolSelect():
 
 
 def txRxMode():
-    userInp = input("[TX] : ")
+    userInp = input("[TX]   : ")
     while 1:
         if userInp == "" or userInp == "e" or \
             userInp == "exit":
@@ -67,26 +67,31 @@ def txRxMode():
         elif protocolMode == 1:
             spiObj.write_readinto(transmitBytes, receiveBytes)
             receiveAuxBytes = spiObj.read(32, write=0x00)
+            if receiveAuxBytes is None:
+                receiveBytes = b''
+            
             for i in range(len(receiveAuxBytes)):
                 receiveBytes.append(receiveAuxBytes[i])
         elif protocolMode == 2:
             uartObj.write(transmitBytes)
-            uartObj.readinto(receiveBytes, 32)
+            receiveBytes = uartObj.read(numRxBytes)
+            if receiveBytes is None:
+                receiveBytes = b''
         else:
             print("Error! Unknown protocol mode, aborting...")
             break
         
         if numRxBytes != 0:
-            rxString = "[RX] :"
+            rxString = "[RX]   :"
             for i in range(len(receiveBytes)):
                 rxString += " {0:02X}".format(receiveBytes[i])
             print(rxString)
         
-        userInp = input("[TX] : ")
+        userInp = input("[TX]   : ")
 
 
 def printHelp():
-    print("Commands\nprot - protocol select\ntalk - begin tx/rx\nhelp - guess lol")
+    print("Commands\nprot - protocol select\ntalk - begin tx/rx\nhelp - print help info")
     print("lcd  - Print to 1602 LCD rows\nexit - leave this shell")
 
 
@@ -141,8 +146,8 @@ def main():
         elif userInp == "help" or userInp[0] == "h":
             printHelp()
         elif userInp == "lcd":
-            dispText1 = input("Row1: ")
-            dispText2 = input("Row2: ")
+            dispText1 = input("[LCD]  : Row1: ")
+            dispText2 = input("[LCD]  : Row2: ")
             
             if len(dispText1) != 0:
                 transmitBytes = stringToLCDCommand(dispText1, 1)
