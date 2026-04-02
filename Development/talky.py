@@ -1,4 +1,5 @@
 from machine import I2C, SPI, UART, Pin
+from time import sleep_ms
 
 # ----- GLOBAL VARIABLES ----- #
 protocolMode = 255 # Default value
@@ -116,15 +117,49 @@ def stringToLCDCommand(inputString, useTopRow=1):
     return returnBytes
 
 
+def setupLCD():
+    # LCD Controller init. sequence
+    sleep_ms(20)
+    i2cObj.writeto(62, b'\x00\x38', True)
+    sleep_ms(4)
+    i2cObj.writeto(62, b'\x00\x0C', True)
+    sleep_ms(4)
+    i2cObj.writeto(62, b'\x00\x01', True)
+    sleep_ms(4)
+    i2cObj.writeto(62, b'\x00\x06', True)
+    
+    # Backlight controller init. sequence
+    sleep_ms(4)
+    i2cObj.writeto(96, b'\x00\x01', True)
+    sleep_ms(4)
+    i2cObj.writeto(96, b'\x08\x04', True)
+
+
+def updateLCD(topString, bottomString):
+    # Perform screen wipe
+    i2cObj.writeto(62, b'\x00\x01', True)
+    sleep_ms(3)
+    
+    # Update screen rows
+    if topString is not None:
+        txBytes = stringToLCDCommand(topString, 1)
+        i2cObj.writeto(62, txBytes, True)
+    
+    if bottomString is not None:
+        txBytes = stringToLCDCommand(bottomString, 0)
+        i2cObj.writeto(62, txBytes, True)
+
+
 def main():
     global i2cObj, spiObj, uartObj, i2cAddr
     
     # ----- I2C SETUP ----- #
     i2cObj = I2C(0, scl=Pin(9), sda=Pin(8), \
         freq=100000)
+    setupLCD()
     
     # ----- SPI SETUP ----- #
-    spiObj = SPI(0, baudrate=100000, polarity=0, \
+    spiObj = SPI(0, baudrate=10000, polarity=0, \
         phase=0, bits=8, firstbit=SPI.MSB, sck=Pin(2), mosi=Pin(3), miso=Pin(4))
     spiNCS = Pin(5)
     
@@ -148,14 +183,9 @@ def main():
         elif userInp == "lcd":
             dispText1 = input("[LCD]  : Row1: ")
             dispText2 = input("[LCD]  : Row2: ")
-            
-            if len(dispText1) != 0:
-                transmitBytes = stringToLCDCommand(dispText1, 1)
-                i2cObj.writeto(62, transmitBytes, True)
-            
-            if len(dispText2) != 0:
-                transmitBytes = stringToLCDCommand(dispText2, 0)
-                i2cObj.writeto(62, transmitBytes, True)
+            updateLCD(dispText1, dispText2)
+        elif userInp == "set":
+            setupLCD()
         
         userInp = input("[MAIN] : ")
 
