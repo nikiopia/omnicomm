@@ -1,7 +1,12 @@
 # ----- IMPORTS ----- #
 
 from machine import I2C, SPI, UART, Pin
-from time import sleep, sleep_ms
+from time import sleep, sleep_ms, ticks_ms, ticks_diff
+
+# ----- CONTROL "DEFINES" ----- #
+
+CIRCULAR_BUFFER_SIZE = 3
+KEYPAD_SCAN_MS_PERIOD = 20
 
 # ----- GLOBAL VARIABLES ----- #
 
@@ -15,6 +20,9 @@ protocolSelectMenuText = [
     "SPI",
     "UART"
 ]
+
+lastbuttonFlags = 0xFFFFFFFF
+lastKeypadScan = 0
 
 # ----- MENU HELPER FUNCTIONS ----- #
 
@@ -40,7 +48,7 @@ def menuChangeOption(menuTextArray, menuSelection, numOptions,\
             menuSelection[0] = numOptions - 1
     
     # Show newly selected option
-    updateLCD(None, menuTextArray[1 + menuSelection[0]])
+    updateLCD(menuTextArray[0], menuTextArray[1 + menuSelection[0]])
 
 
 
@@ -70,6 +78,68 @@ def stringToLCDCommand(inputString, useTopRow=1):
         readIndex += 1
     
     return returnBytes
+
+
+def columnScanner(scanCode):
+    for i in range(6):
+        scanCode <<= 1
+        scanCode |= (colPins[i].value() & 1)
+    
+    return scanCode
+
+
+def doKeypadScan():
+    global rawSwitchStates, writeIndex, debouncedStates, lastDebouncedStates, buttonFlags
+    
+    # ----- SCAN CODE ----- #
+    scanCode = 0
+    
+    # First row
+    row0Pin.value(1)
+    row1Pin.value(0)
+    row2Pin.value(0)
+    row3Pin.value(0)
+    scanCode = columnScanner(scanCode)
+    
+    # Second row
+    row0Pin.value(0)
+    row1Pin.value(1)
+    scanCode = columnScanner(scanCode)
+    
+    # Third row
+    row1Pin.value(0)
+    row2Pin.value(1)
+    scanCode = columnScanner(scanCode)
+    
+    # Fourth row
+    row2Pin.value(0)
+    row3Pin.value(1)
+    scanCode = columnScanner(scanCode)
+    
+    # Turn off fourth row
+    row3Pin.value(0)
+    
+    # ----- DEBOUNCING STATE MACHINE ----- #
+    
+    # Sample inputs
+    rawSwitchStates[writeIndex] = scanCode
+    
+    # Update write index as circular buffer
+    writeIndex += 1
+    if writeIndex >= CIRCULAR_BUFFER_SIZE:
+        writeIndex = 0
+    
+    # Compute stableHigh, stableLow
+    stableHigh = 0xFFFFFFFF
+    stableLow = 0
+    for i in range(CIRCULAR_BUFFER_SIZE):
+        stableHigh &= rawSwitchStates[i]
+        stableLow |= rawSwitchStates[i]
+    
+    # Determine new debounced states, and rising edge events
+    lastDebouncedStates = debouncedStates
+    debouncedStates = (debouncedStates & stableLow) | stableHigh
+    buttonFlags |= (debouncedStates ^ lastDebouncedStates) & debouncedStates
 
 
 
@@ -144,7 +214,10 @@ def setupLCD():
 
 
 def setup():
-    global i2cObj, spiObj, uartObj
+    global i2cObj, spiObj, uartObj, colPins, row0Pin, row1Pin
+    global row2Pin, row3Pin
+    
+    global rawSwitchStates, writeIndex, debouncedStates, buttonFlags
     
     # LCD Setup
     i2cObj = I2C(0, scl=Pin(9), sda=Pin(8), \
@@ -159,29 +232,60 @@ def setup():
     # UART Setup
     uartObj = UART(0, baudrate=9600, bits=8, \
     parity=None, stop=1)
+    
+    # Column Setup
+    col0Pin = Pin(13, Pin.IN, Pin.PULL_DOWN)
+    col1Pin = Pin(12, Pin.IN, Pin.PULL_DOWN)
+    col2Pin = Pin(11, Pin.IN, Pin.PULL_DOWN)
+    col3Pin = Pin(10, Pin.IN, Pin.PULL_DOWN)
+    col4Pin = Pin(15, Pin.IN, Pin.PULL_DOWN)
+    col5Pin = Pin(14, Pin.IN, Pin.PULL_DOWN)
+    colPins = [col0Pin, col1Pin, col2Pin, col3Pin, col4Pin, col5Pin]
+    
+    # Row Setup
+    row0Pin = Pin(21, Pin.OUT)
+    row1Pin = Pin(20, Pin.OUT)
+    row2Pin = Pin(19, Pin.OUT)
+    row3Pin = Pin(18, Pin.OUT)
+    
+    # Debouncing Setup
+    writeIndex = 0
+    debouncedStates = 0
+    buttonFlags = 0
+    rawSwitchStates = []
+    for i in range(CIRCULAR_BUFFER_SIZE):
+        rawSwitchStates.append(0)
 
 
 
 # ----- MAIN LOOP ----- #
 
 def main():
+    global lastbuttonFlags, lastKeypadScan
+    
     # Startup configuration
     setup()
     
     # Display splash text
     updateLCD("Project", "OmniComm")
-    sleep(2)
-    updateLCD("Press any key", "to continue")
     sleep(5)
-    newMenuSetup(protocolSelectMenuText, protocolSelection) # SPI
-    sleep(5)
-    menuChangeOption(protocolSelectMenuText, protocolSelection, 2, True) # UART
-    sleep(2)
-    menuChangeOption(protocolSelectMenuText, protocolSelection, 2, True) # SPI wrap around
-    sleep(2)
-    menuChangeOption(protocolSelectMenuText, protocolSelection, 2, False) # UART wrap around
-    sleep(2)
-    menuChangeOption(protocolSelectMenuText, protocolSelection, 2, False) # SPI
+    
+    while 1:
+        # Keypad scanning asynchronous delay
+        now = ticks_ms()
+        if ticks_diff(now, lastKeypadScan) >= KEYPAD_SCAN_MS_PERIOD:
+            lastKeypadScan = now
+            
+            # Get button inputs
+            doKeypadScan()
+            
+            # Update screen if new event occurs
+            if (buttonFlags ^ lastbuttonFlags) != 0:
+                updateLCD("buttonFlags:", "0x{0:08X}".format(buttonFlags))
+            
+            lastbuttonFlags = buttonFlags
+        
+        # State machine -- TODO
 
 
 main()
