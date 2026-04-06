@@ -63,6 +63,8 @@ protocolSelectMenuText = [
 # 4 - Blue
 # 5 - Purple
 colorMode = 1
+
+# Disco mode setup, aka cycle through colors
 discoMode = 0
 lastDiscoUpdate = 0
 
@@ -76,18 +78,46 @@ rawSwitchStates = []
 for i in range(CIRCULAR_BUFFER_SIZE):
     rawSwitchStates.append(0)
 
+# TX/RX state variables
+txScrolling = True
+topRow = "~TX"
+bottomRow = " RX"
+txString = ""
+rxString = ""
+lastTxString = "0"
+lastRxString = "0"
+
+updateTopRow = False
+forceTopRowUpdate = False
+updateBottomRow = False
+forceBottomRowUpdate = False
+
+txWindowOffset = 0
+rxWindowOffset = 0
+lastTxOffset = 1
+lastRxOffset = 1
+
+displayUpdated = True
+
+
 # ----- MENU HELPER FUNCTIONS ----- #
 
 def newMenuSetup(menuTextArray, menuSelection):
+    global topRow, bottomRow, displayUpdated
+    
     # Update selection indicator
     menuSelection[0] = 0
     
     # Update screen with title and first option
-    updateLCD(menuTextArray[0], menuTextArray[1])
+    topRow = menuTextArray[0]
+    bottomRow = menuTextArray[1]
+    displayUpdated = True
 
 
 def menuChangeOption(menuTextArray, menuSelection, numOptions,\
                      incrementMode=True):
+    global topRow, bottomRow, displayUpdated
+    
     # Update selection
     if incrementMode:
         menuSelection[0] += 1
@@ -100,7 +130,9 @@ def menuChangeOption(menuTextArray, menuSelection, numOptions,\
             menuSelection[0] = numOptions - 1
     
     # Show newly selected option
-    updateLCD(menuTextArray[0], menuTextArray[1 + menuSelection[0]])
+    #topRow = menuTextArray[0]
+    bottomRow = menuTextArray[1 + menuSelection[0]]
+    displayUpdated = True
 
 
 
@@ -195,9 +227,18 @@ def doKeypadScan():
 
 
 def addRemoveHexKey(newChar, addMode=True):
-    global buttonFlags, userInpTX
+    global buttonFlags, txString, updateTopRow
     
-    lastChar = userInpTX[-1:]
+    # Get last two characters
+    secondToLastChar = txString[-2:-1]
+    lastChar = txString[-1:]
+    
+    # Make comparisons easy
+    if secondToLastChar == "":
+        secondToLastChar = " "
+    if lastChar == "":
+        lastChar = " "
+    
     if addMode:
         if newChar is None:
             return
@@ -205,18 +246,22 @@ def addRemoveHexKey(newChar, addMode=True):
             return
         
         # Add new character
-        userInpTX += newChar
-        if lastChar != "" and lastChar != " ":
-            userInpTX += " "
+        if lastChar != " " and secondToLastChar != " ":
+            txString += " "
+        
+        txString += newChar
     else:
-        # Remove a character
-        if lastChar == "":
+        if lastChar == " " and secondToLastChar == " ":
             return
         
-        if lastChar == " ":
-            userInpTX = userInpTX[:-2]
+        # Remove a character
+        if secondToLastChar == " " and len(txString) > 1:
+            txString = txString[:-2]
         else:
-            userInpTX = userInpTX[:-1]
+            txString = txString[:-1]
+    
+    # Mark topRow for update
+    updateTopRow = True
 
 
 def cycleColorMode():
@@ -249,6 +294,135 @@ def cycleColorMode():
     i2cObj.writeto(96, txBytes, True)
 
 
+def updateTopRowString():
+    global topRow, updateTopRow, lastTxString, displayUpdated
+    global txWindowOffset, lastTxOffset, forceTopRowUpdate
+    
+    updateTopRow = False
+    tempTopRow = ""
+    if txScrolling:
+        tempTopRow = "~TX "
+    else:
+        tempTopRow = " TX "
+    
+    txLen = len(txString)
+    if txLen <= 12:
+        if txString != lastTxString or forceTopRowUpdate:
+            forceTopRowUpdate = False
+            
+            # Full string can fit on screen
+            tempTopRow += txString
+            lastTxString = txString
+            
+            topRow = tempTopRow
+            displayUpdated = True
+    else:
+        # Always show new content
+        if txString != lastTxString:
+            txWindowOffset = 0
+            tempTopRow += txString[(txLen - 12):(txLen)]
+            lastTxString = txString
+            
+            topRow = tempTopRow
+            displayUpdated = True
+        else:
+            # Clamp window offset into usable range
+            if txWindowOffset > (txLen - 12):
+                txWindowOffset = txLen - 12
+            elif txWindowOffset < 0:
+                txWindowOffset = 0
+            
+            if txWindowOffset != lastTxOffset or forceTopRowUpdate:
+                forceTopRowUpdate = False
+                
+                tempTopRow += txString[(txLen - 12 - txWindowOffset):(txLen - txWindowOffset)]
+                lastTxOffset = txWindowOffset
+                
+                topRow = tempTopRow
+                displayUpdated = True
+
+
+def updateBottomRowString():
+    global bottomRow, updateBottomRow, lastRxString, displayUpdated
+    global rxWindowOffset, lastRxOffset, forceBottomRowUpdate
+    
+    updateBottomRow = False
+    tempBottomRow = ""
+    if txScrolling:
+        tempBottomRow = " RX "
+    else:
+        tempBottomRow = "~RX "
+    
+    rxLen = len(rxString)
+    if rxLen <= 12:
+        if rxString != lastRxString or forceBottomRowUpdate:
+            forceBottomRowUpdate = False
+            
+            # Full string can fit on screen
+            tempBottomRow += rxString
+            lastRxString = rxString
+            
+            bottomRow = tempBottomRow
+            displayUpdated = True
+    else:
+        # Always show new content
+        if rxString != lastRxString:
+            rxWindowOffset = 0
+            tempBottomRow += rxString[(rxLen - 12):(rxLen)]
+            lastRxString = rxString
+            
+            bottomRow = tempBottomRow
+            displayUpdated = True
+        else:
+            # Clamp window offset into usable range
+            if rxWindowOffset > (rxLen - 12):
+                rxWindowOffset = rxLen - 12
+            elif rxWindowOffset < 0:
+                rxWindowOffset = 0
+            
+            if rxWindowOffset != lastRxOffset or forceBottomRowUpdate:
+                forceBottomRowUpdate = False
+                
+                tempBottomRow += rxString[(rxLen - 12 - rxWindowOffset):(rxLen - rxWindowOffset)]
+                lastRxOffset = rxWindowOffset
+                
+                bottomRow = tempBottomRow
+                displayUpdated = True
+
+
+def sendAndListen():
+    global rxString, updateBottomRow
+    
+    if txString == "":
+        return
+    
+    # TX String (From user) to bytes
+    txBytes = b''
+    currentByte = b''
+    txStrings = txString.split()
+    for element in txStrings:
+        if len(element) == 1:
+            txBytes += currentByte.fromhex("0" + element)
+        else:
+            txBytes += currentByte.fromhex(element)
+    
+    # Do the TX/RX maamajamma
+    if protocolSelect == 0:
+        rxBytes = HD_SPI(txBytes)
+    elif protocolSelect == 1:
+        rxBytes = HD_UART(txBytes)
+    
+    # RX bytes to RX string for display
+    rxString = ""
+    for i in range(len(rxBytes)):
+        rxString += " {0:02X}".format(rxBytes[i])
+    if rxString != "":
+        rxString = rxString[1:]
+    
+    # Please update bottom row now :3
+    updateBottomRow = True
+
+
 
 # ----- HARDWARE DRIVER FUNCTIONS ----- #
 
@@ -267,19 +441,25 @@ def updateLCD(topString, bottomString):
         i2cObj.writeto(62, txBytes, True)
 
 
-def HD_SPI(outByte):
+def HD_SPI(outBytes):
     # Check parameter
-    if outByte is None:
+    if outBytes is None:
         return
     
+    # Pull down NCS pin
+    spiNCS.value(0)
+    
     # Send outByte to SPI bus
-    inByte = b''
-    spiObj.write_readinto(outByte, inByte)
-    if inByte is None:
+    inBytes = b''
+    spiObj.write_readinto(outBytes, inBytes)
+    if inBytes is None:
         inBytes = b''
     
+    # Return NCS to high state
+    spiNCS.value(1)
+    
     # Return response
-    return inByte
+    return inBytes
 
 
 def HD_UART(outBytes):
@@ -291,7 +471,7 @@ def HD_UART(outBytes):
     uartObj.write(outBytes)
     
     # Read bytes from UART (If any)
-    inBytes = uartObj.read(numRxBytes)
+    inBytes = uartObj.read()
     if inBytes is None:
         inBytes = b''
     
@@ -321,22 +501,13 @@ def setupLCD():
 
 
 def setup():
-    global i2cObj, spiObj, uartObj, colPins, row0Pin, row1Pin
+    global i2cObj, colPins, row0Pin, row1Pin
     global row2Pin, row3Pin
     
     # LCD Setup
     i2cObj = I2C(0, scl=Pin(9), sda=Pin(8), \
         freq=100000)
     setupLCD()
-    
-    # SPI Setup
-    spiObj = SPI(0, baudrate=10000, polarity=0, \
-        phase=0, bits=8, firstbit=SPI.MSB, sck=Pin(2), mosi=Pin(3), miso=Pin(4))
-    spiNCS = Pin(5)
-    
-    # UART Setup
-    uartObj = UART(0, baudrate=9600, bits=8, \
-    parity=None, stop=1)
     
     # Column Setup
     col0Pin = Pin(13, Pin.IN, Pin.PULL_DOWN)
@@ -354,12 +525,504 @@ def setup():
     row3Pin = Pin(18, Pin.OUT)
 
 
+def initTXRX_device():
+    global uartObj, spiObj, spiNCS
+    
+    if protocolSelect == 0:
+        # SPI Setup
+        spiObj = SPI(0, baudrate=SPI_baudrate, polarity=SPI_polarity, \
+            phase=SPI_phase, bits=SPI_dataBits, firstbit=SPI.MSB, sck=Pin(2), mosi=Pin(3), miso=Pin(4))
+        spiNCS = Pin(5)
+        spiNCS.value(1)
+    elif protocolSelect == 1:
+        # UART Setup
+        uartObj = UART(0, baudrate=UART_baudrate, bits=UART_dataBits, \
+        parity=UART_parity, stop=UART_stopBits)
+
+
+
+# ----- STATE INFORMATION ----- #
+
+# General state variables
+# state:
+# 0 - protocolSelect (SPI / UART)
+# 1 - UART baud (9600* / 115200)
+# 2 - UART data bits (8* / 9)
+# 3 - UART parity (None* / Even / Odd)
+# 4 - UART stop bits (1* / 2)
+# 5 - SPI baud (10000*, 100000)
+# 6 - SPI data bits (8*)
+# 7 - SPI polarity (0* / 1)
+# 8 - SPI phase (0* / 1)
+# 9 - TX/RX
+state = 0
+stateUpdated = True
+
+# Protocol Select
+protocolSelect_menuText = [
+    "Protocol:",
+    "SPI",
+    "UART"
+]
+protocolSelect_numOptions = len(protocolSelect_menuText) - 1
+protocolSelect_mode = [0]
+protocolSelect = 0
+
+# UART baud
+UART_baud_menuText = [
+    "UART Baudrate:",
+    "9600",
+    "115200"
+]
+UART_baud_numOptions = len(UART_baud_menuText) - 1
+UART_baud_mode = [0]
+UART_baudrate = 9600
+
+# UART data bits
+UART_dataBits_menuText = [
+    "UART Data Bits:",
+    "7 bits",
+    "8 bits"
+]
+UART_dataBits_numOptions = len(UART_dataBits_menuText) - 1
+UART_dataBits_mode = [0]
+UART_dataBits = 7
+
+# UART parity
+UART_parity_menuText = [
+    "UART Parity:",
+    "None",
+    "Even",
+    "Odd"
+]
+UART_parity_numOptions = len(UART_parity_menuText) - 1
+UART_parity_mode = [0]
+UART_parity = None
+
+# UART stop bits
+UART_stopBits_menuText = [
+    "UART Stop Bits:",
+    "1 bit",
+    "2 bits"
+]
+UART_stopBits_numOptions = len(UART_stopBits_menuText) - 1
+UART_stopBits_mode = [0]
+UART_stopBits = 1
+
+# SPI baud
+SPI_baud_menuText = [
+    "SPI Baudrate:",
+    "10 kHz",
+    "100 kHz"
+]
+SPI_baud_numOptions = len(SPI_baud_menuText) - 1
+SPI_baud_mode = [0]
+SPI_baudrate = 10000
+
+# SPI data bits
+SPI_dataBits_menuText = [
+    "SPI Data Bits:",
+    "8 bits"
+]
+SPI_dataBits_numOptions = len(SPI_dataBits_menuText) - 1
+SPI_dataBits_mode = [0]
+SPI_dataBits = 8
+
+# SPI polarity
+SPI_polarity_menuText = [
+    "SPI Clock Idle:",
+    "Low Idle",
+    "High Idle"
+]
+SPI_polarity_numOptions = len(SPI_polarity_menuText) - 1
+SPI_polarity_mode = [0]
+SPI_polarity = 0
+
+# SPI phase
+SPI_phase_menuText = [
+    "SPI Phase:",
+    "0: Sample, Setup",
+    "1: Setup, Sample"
+]
+SPI_phase_numOptions = len(SPI_phase_menuText) - 1
+SPI_phase_mode = [0]
+SPI_phase = 0
+
+doAnotherCheck = False
+protocolConfigDone = False
+
+
+# ----- STATE FUNCTIONS ----- #
+
+def stateTick_TXRX():
+    global buttonFlags, txScrolling, forceTopRowUpdate, forceBottomRowUpdate
+    global txWindowOffset, rxWindowOffset, updateTopRow, updateBottomRow
+    
+    # OK (Send) key
+    if (buttonFlags & KEYCODE_OK) != 0:
+        buttonFlags &= ~(KEYCODE_OK)
+        sendAndListen()
+    
+    # Hexadecimal keys
+    if (buttonFlags & KEYCODE_0) != 0:
+        buttonFlags &= ~(KEYCODE_0)
+        addRemoveHexKey("0", True)
+    if (buttonFlags & KEYCODE_1) != 0:
+        buttonFlags &= ~(KEYCODE_1)
+        addRemoveHexKey("1", True)
+    if (buttonFlags & KEYCODE_2) != 0:
+        buttonFlags &= ~(KEYCODE_2)
+        addRemoveHexKey("2", True)
+    if (buttonFlags & KEYCODE_3) != 0:
+        buttonFlags &= ~(KEYCODE_3)
+        addRemoveHexKey("3", True)
+    if (buttonFlags & KEYCODE_4) != 0:
+        buttonFlags &= ~(KEYCODE_4)
+        addRemoveHexKey("4", True)
+    if (buttonFlags & KEYCODE_5) != 0:
+        buttonFlags &= ~(KEYCODE_5)
+        addRemoveHexKey("5", True)
+    if (buttonFlags & KEYCODE_6) != 0:
+        buttonFlags &= ~(KEYCODE_6)
+        addRemoveHexKey("6", True)
+    if (buttonFlags & KEYCODE_7) != 0:
+        buttonFlags &= ~(KEYCODE_7)
+        addRemoveHexKey("7", True)
+    if (buttonFlags & KEYCODE_8) != 0:
+        buttonFlags &= ~(KEYCODE_8)
+        addRemoveHexKey("8", True)
+    if (buttonFlags & KEYCODE_9) != 0:
+        buttonFlags &= ~(KEYCODE_9)
+        addRemoveHexKey("9", True)
+    if (buttonFlags & KEYCODE_A) != 0:
+        buttonFlags &= ~(KEYCODE_A)
+        addRemoveHexKey("A", True)
+    if (buttonFlags & KEYCODE_B) != 0:
+        buttonFlags &= ~(KEYCODE_B)
+        addRemoveHexKey("B", True)
+    if (buttonFlags & KEYCODE_C) != 0:
+        buttonFlags &= ~(KEYCODE_C)
+        addRemoveHexKey("C", True)
+    if (buttonFlags & KEYCODE_D) != 0:
+        buttonFlags &= ~(KEYCODE_D)
+        addRemoveHexKey("D", True)
+    if (buttonFlags & KEYCODE_E) != 0:
+        buttonFlags &= ~(KEYCODE_E)
+        addRemoveHexKey("E", True)
+    if (buttonFlags & KEYCODE_F) != 0:
+        buttonFlags &= ~(KEYCODE_F)
+        addRemoveHexKey("F", True)
+    if (buttonFlags & KEYCODE_DEL) != 0:
+        buttonFlags &= ~(KEYCODE_DEL)
+        addRemoveHexKey(None, False)
+    
+    # Arrow keys
+    if (buttonFlags & (KEYCODE_UP | KEYCODE_DOWN)) != 0:
+        buttonFlags &= ~(KEYCODE_UP | KEYCODE_DOWN)
+        txScrolling = not(txScrolling)
+        forceTopRowUpdate = True
+        forceBottomRowUpdate = True
+    if (buttonFlags & KEYCODE_LEFT) != 0:
+        buttonFlags &= ~(KEYCODE_LEFT)
+        if txScrolling:
+            txWindowOffset += 1
+            updateTopRow = True
+        else:
+            rxWindowOffset += 1
+            updateBottomRow = True
+    if (buttonFlags & KEYCODE_RIGHT) != 0:
+        buttonFlags &= ~(KEYCODE_RIGHT)
+        if txScrolling:
+            txWindowOffset -= 1
+            updateTopRow = True
+        else:
+            rxWindowOffset -= 1
+            updateBottomRow = True
+    
+    # Update top/bottom rows
+    if updateTopRow or forceTopRowUpdate:
+        updateTopRow = False
+        updateTopRowString()
+    if updateBottomRow or forceBottomRowUpdate:
+        updateBottomRow = False
+        updateBottomRowString()
+
+
+def stateTick():
+    global state, stateUpdated, buttonFlags, doAnotherCheck, protocolConfigDone
+    
+    # Return parameters
+    global protocolSelect, UART_baudrate, UART_dataBits, UART_parity, UART_stopBits
+    global SPI_baudrate, SPI_dataBits, SPI_polarity, SPI_phase
+    global forceTopRowUpdate, forceBottomRowUpdate
+    
+    if state == 0:
+        # Protocol Select
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(protocolSelect_menuText, protocolSelect_mode)
+        else:
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if protocolSelect_mode[0] == 0:
+                    # SPI selected
+                    protocolSelect = 0
+                    stateUpdated = True
+                    state = 5
+                elif protocolSelect_mode[0] == 1:
+                    # UART selected
+                    protocolSelect = 1
+                    stateUpdated = True
+                    state = 1
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(protocolSelect_menuText, protocolSelect_mode,\
+                                 protocolSelect_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(protocolSelect_menuText, protocolSelect_mode,\
+                                 protocolSelect_numOptions, incrementMode=True)
+    elif state == 1:
+        # UART baud
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(UART_baud_menuText, UART_baud_mode)
+        else:
+            if (buttonFlags & KEYCODE_LEFT) != 0:
+                buttonFlags &= ~(KEYCODE_LEFT)
+                stateUpdated = True
+                state = 0
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if UART_baud_mode[0] == 0:
+                    UART_baudrate = 9600
+                elif UART_baud_mode[0] == 1:
+                    UART_baudrate = 115200
+                state = 2
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(UART_baud_menuText, UART_baud_mode,\
+                                 UART_baud_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(UART_baud_menuText, UART_baud_mode,\
+                                 UART_baud_numOptions, incrementMode=True)
+    elif state == 2:
+        # UART data bits
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(UART_dataBits_menuText, UART_dataBits_mode)
+        else:
+            if (buttonFlags & KEYCODE_LEFT) != 0:
+                buttonFlags &= ~(KEYCODE_LEFT)
+                stateUpdated = True
+                state = 1
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if UART_dataBits_mode[0] == 0:
+                    UART_dataBits = 7
+                elif UART_dataBits_mode[0] == 1:
+                    UART_dataBits = 8
+                state = 3
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(UART_dataBits_menuText, UART_dataBits_mode,\
+                                 UART_dataBits_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(UART_dataBits_menuText, UART_dataBits_mode,\
+                                 UART_dataBits_numOptions, incrementMode=True)
+    elif state == 3:
+        # UART parity
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(UART_parity_menuText, UART_parity_mode)
+        else:
+            if (buttonFlags & KEYCODE_LEFT) != 0:
+                buttonFlags &= ~(KEYCODE_LEFT)
+                stateUpdated = True
+                state = 2
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if UART_parity_mode[0] == 0:
+                    UART_parity = None
+                elif UART_parity_mode[0] == 1:
+                    UART_parity = 0
+                elif UART_parity_mode[0] == 2:
+                    UART_parity = 1
+                state = 4
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(UART_parity_menuText, UART_parity_mode,\
+                                 UART_parity_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(UART_parity_menuText, UART_parity_mode,\
+                                 UART_parity_numOptions, incrementMode=True)
+    elif state == 4:
+        # UART stop bits
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(UART_stopBits_menuText, UART_stopBits_mode)
+        else:
+            if (buttonFlags & KEYCODE_LEFT) != 0:
+                buttonFlags &= ~(KEYCODE_LEFT)
+                stateUpdated = True
+                state = 3
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if UART_stopBits_mode[0] == 0:
+                    UART_stopBits = 1
+                elif UART_stopBits_mode[0] == 1:
+                    UART_stopBits = 2
+                
+                forceTopRowUpdate = True
+                forceBottomRowUpdate = True
+                protocolConfigDone = True
+                state = 9
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(UART_stopBits_menuText, UART_stopBits_mode,\
+                                 UART_stopBits_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(UART_stopBits_menuText, UART_stopBits_mode,\
+                                 UART_stopBits_numOptions, incrementMode=True)
+    elif state == 5:
+        # SPI baud
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(SPI_baud_menuText, SPI_baud_mode)
+        else:
+            if (buttonFlags & KEYCODE_LEFT) != 0:
+                buttonFlags &= ~(KEYCODE_LEFT)
+                stateUpdated = True
+                state = 0
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if SPI_baud_mode[0] == 0:
+                    SPI_baudrate = 10000
+                elif SPI_baud_mode[0] == 1:
+                    SPI_baudrate = 100000
+                
+                state = 6
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(SPI_baud_menuText, SPI_baud_mode,\
+                                 SPI_baud_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(SPI_baud_menuText, SPI_baud_mode,\
+                                 SPI_baud_numOptions, incrementMode=True)
+    elif state == 6:
+        # SPI data bits
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(SPI_dataBits_menuText, SPI_dataBits_mode)
+        else:
+            if (buttonFlags & KEYCODE_LEFT) != 0:
+                buttonFlags &= ~(KEYCODE_LEFT)
+                stateUpdated = True
+                state = 5
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if SPI_dataBits_mode[0] == 0:
+                    SPI_dataBits = 8
+                
+                state = 7
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(SPI_dataBits_menuText, SPI_dataBits_mode,\
+                                 SPI_dataBits_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(SPI_dataBits_menuText, SPI_dataBits_mode,\
+                                 SPI_dataBits_numOptions, incrementMode=True)
+    elif state == 7:
+        # SPI polarity
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(SPI_polarity_menuText, SPI_polarity_mode)
+        else:
+            if (buttonFlags & KEYCODE_LEFT) != 0:
+                buttonFlags &= ~(KEYCODE_LEFT)
+                stateUpdated = True
+                state = 6
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if SPI_polarity_mode[0] == 0:
+                    SPI_polarity = 0
+                elif SPI_polarity_mode[0] == 1:
+                    SPI_polarity = 1
+                
+                state = 8
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(SPI_polarity_menuText, SPI_polarity_mode,\
+                                 SPI_polarity_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(SPI_polarity_menuText, SPI_polarity_mode,\
+                                 SPI_polarity_numOptions, incrementMode=True)
+    elif state == 8:
+        # SPI phase
+        if stateUpdated:
+            stateUpdated = False
+            newMenuSetup(SPI_phase_menuText, SPI_phase_mode)
+        else:
+            if (buttonFlags & KEYCODE_LEFT) != 0:
+                buttonFlags &= ~(KEYCODE_LEFT)
+                stateUpdated = True
+                state = 7
+            if (buttonFlags & KEYCODE_RIGHT) != 0:
+                buttonFlags &= ~(KEYCODE_RIGHT)
+                stateUpdated = True
+                if SPI_phase_mode[0] == 0:
+                    SPI_phase = 0
+                elif SPI_phase_mode[0] == 1:
+                    SPI_phase = 1
+                
+                forceTopRowUpdate = True
+                forceBottomRowUpdate = True
+                protocolConfigDone = True
+                state = 9
+            if (buttonFlags & KEYCODE_UP) != 0:
+                buttonFlags &= ~(KEYCODE_UP)
+                menuChangeOption(SPI_phase_menuText, SPI_phase_mode,\
+                                 SPI_phase_numOptions, incrementMode=False)
+            if (buttonFlags & KEYCODE_DOWN) != 0:
+                buttonFlags &= ~(KEYCODE_DOWN)
+                menuChangeOption(SPI_phase_menuText, SPI_phase_mode,\
+                                 SPI_phase_numOptions, incrementMode=True)
+    elif state == 9:
+        if (buttonFlags & KEYCODE_MP2) != 0:
+            buttonFlags &= ~(KEYCODE_MP2)
+            stateUpdated = True
+            state = 0
+            doAnotherCheck = True
+            return
+        
+        if protocolConfigDone:
+            protocolConfigDone = False
+            initTXRX_device()
+        
+        stateTick_TXRX()
+
+
 
 # ----- MAIN LOOP ----- #
 
 def main():
-    global lastbuttonFlags, lastKeypadScan, buttonFlags
-    global userInpTX, windowOffset, discoMode, lastDiscoUpdate
+    global lastbuttonFlags, lastKeypadScan, buttonFlags, doAnotherCheck
+    global displayUpdated, discoMode, lastDiscoUpdate
     
     # Startup configuration
     setup()
@@ -368,11 +1031,6 @@ def main():
     updateLCD("Project", "OmniComm")
     sleep(5)
     
-    bottomRow = "RX:"
-    userInpTX = ""
-    lastUserInpTX = "0"
-    windowOffset = 0
-    lastOffset = 1
     while 1:
         # Keypad scanning asynchronous delay
         now = ticks_ms()
@@ -388,98 +1046,23 @@ def main():
             #
             #lastbuttonFlags = buttonFlags
             
-            # Utility key checks
-            if (buttonFlags & KEYCODE_MP2) != 0:
-                buttonFlags &= ~(KEYCODE_MP2)
-                cycleColorMode()
-            
+            # Disco mode check
             if (buttonFlags & KEYCODE_MP1) != 0:
                 buttonFlags &= ~(KEYCODE_MP1)
                 discoMode ^= 1
             
-            # Key code test
-            if (buttonFlags & KEYCODE_0) != 0:
-                buttonFlags &= ~(KEYCODE_0)
-                addRemoveHexKey("0", True)
-            if (buttonFlags & KEYCODE_1) != 0:
-                buttonFlags &= ~(KEYCODE_1)
-                addRemoveHexKey("1", True)
-            if (buttonFlags & KEYCODE_2) != 0:
-                buttonFlags &= ~(KEYCODE_2)
-                addRemoveHexKey("2", True)
-            if (buttonFlags & KEYCODE_3) != 0:
-                buttonFlags &= ~(KEYCODE_3)
-                addRemoveHexKey("3", True)
-            if (buttonFlags & KEYCODE_4) != 0:
-                buttonFlags &= ~(KEYCODE_4)
-                addRemoveHexKey("4", True)
-            if (buttonFlags & KEYCODE_5) != 0:
-                buttonFlags &= ~(KEYCODE_5)
-                addRemoveHexKey("5", True)
-            if (buttonFlags & KEYCODE_6) != 0:
-                buttonFlags &= ~(KEYCODE_6)
-                addRemoveHexKey("6", True)
-            if (buttonFlags & KEYCODE_7) != 0:
-                buttonFlags &= ~(KEYCODE_7)
-                addRemoveHexKey("7", True)
-            if (buttonFlags & KEYCODE_8) != 0:
-                buttonFlags &= ~(KEYCODE_8)
-                addRemoveHexKey("8", True)
-            if (buttonFlags & KEYCODE_9) != 0:
-                buttonFlags &= ~(KEYCODE_9)
-                addRemoveHexKey("9", True)
-            if (buttonFlags & KEYCODE_A) != 0:
-                buttonFlags &= ~(KEYCODE_A)
-                addRemoveHexKey("A", True)
-            if (buttonFlags & KEYCODE_B) != 0:
-                buttonFlags &= ~(KEYCODE_B)
-                addRemoveHexKey("B", True)
-            if (buttonFlags & KEYCODE_C) != 0:
-                buttonFlags &= ~(KEYCODE_C)
-                addRemoveHexKey("C", True)
-            if (buttonFlags & KEYCODE_D) != 0:
-                buttonFlags &= ~(KEYCODE_D)
-                addRemoveHexKey("D", True)
-            if (buttonFlags & KEYCODE_E) != 0:
-                buttonFlags &= ~(KEYCODE_E)
-                addRemoveHexKey("E", True)
-            if (buttonFlags & KEYCODE_F) != 0:
-                buttonFlags &= ~(KEYCODE_F)
-                addRemoveHexKey("F", True)
-            if (buttonFlags & KEYCODE_DEL) != 0:
-                buttonFlags &= ~(KEYCODE_DEL)
-                addRemoveHexKey(None, False)
+            stateTick()
             
-            if (buttonFlags & KEYCODE_LEFT) != 0:
-                buttonFlags &= ~(KEYCODE_LEFT)
-                windowOffset += 1
-            if (buttonFlags & KEYCODE_RIGHT) != 0:
-                buttonFlags &= ~(KEYCODE_RIGHT)
-                windowOffset -= 1
+            if doAnotherCheck:
+                doAnotherCheck = False
+                stateTick()
             
-            txLen = len(userInpTX)
-            if txLen <= 12:
-                if userInpTX != lastUserInpTX:
-                    updateLCD("TX: {0}".format(userInpTX), bottomRow)
-                    lastUserInpTX = userInpTX
-            else:
-                # Always show new content
-                if userInpTX != lastUserInpTX:
-                    windowOffset = 0
-                    updateLCD("TX: {0}".format(userInpTX[(txLen - 12):(txLen)]), bottomRow)
-                    lastUserInpTX = userInpTX
-                    continue
-                
-                # Clamp window offset into usable range
-                if windowOffset > (txLen - 12):
-                    windowOffset = txLen - 12
-                elif windowOffset < 0:
-                    windowOffset = 0
-                
-                if windowOffset != lastOffset:
-                    updateLCD("TX: {0}".format(userInpTX[(txLen - 12 - windowOffset):(txLen - windowOffset)]), bottomRow)
-                    lastOffset = windowOffset
+            # Update display if necessary
+            if displayUpdated:
+                displayUpdated = False
+                updateLCD(topRow, bottomRow)
         
+        # Asynchronous delay for disco mode
         now = ticks_ms()
         if discoMode and ticks_diff(now, lastDiscoUpdate) >= DISCO_UPDATE_MS_PERIOD:
             lastDiscoUpdate = now
